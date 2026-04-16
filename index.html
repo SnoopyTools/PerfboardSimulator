@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Perfboard Pro v8.1.2 - Silver Wire Edition</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root { --bg: #0a0f0a; --sidebar: #121812; --card: #182018; --accent: #daa520; --text: #a0c0a0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); overflow: hidden; font-family: 'Segoe UI', sans-serif; color: var(--text); }
+  .sidebar { width: 280px; background: var(--sidebar); border-right: 2px solid #1e261e; display: flex; flex-direction: column; height: 100vh; padding: 15px; gap: 10px; z-index: 100; overflow-y: auto; }
+  .card { background: var(--card); border: 1px solid #253325; border-radius: 8px; padding: 10px; margin-bottom: 5px; }
+  .label-tiny { font-size: 10px; color: #4a6a4a; letter-spacing: 1px; margin-bottom: 5px; text-transform: uppercase; font-weight: bold; display: block; }
+  button { cursor: pointer; background: #253325; border: 1px solid #354a35; color: #90c890; border-radius: 4px; padding: 8px; font-size: 11px; width: 100%; margin-bottom: 4px; transition: all 0.2s; font-family: 'Courier New', monospace; }
+  button:hover { background: #3a5a3a; color: #fff; }
+  .btn-danger { color: #ff6666; border-color: #552222; }
+  .btn-danger:hover { background: #662222; }
+  select, input { background: #0d120d; border: 1px solid #2a3a2a; color: #90c890; padding: 8px; border-radius: 4px; width: 100%; margin-bottom: 8px; font-size: 12px; }
+  #root { display: flex; height: 100vh; }
+  .board-container { flex: 1; padding: 40px; overflow: auto; display: flex; gap: 40px; align-items: flex-start; background-image: radial-gradient(#1a241a 2px, transparent 2px); background-size: 28px 28px; }
+  .view-column { display: flex; flex-direction: column; align-items: center; }
+  .view-title { font-size: 11px; color: var(--accent); font-weight: bold; margin-bottom: 12px; letter-spacing: 2px; text-transform: uppercase; }
+  .hud-menu { position: absolute; background: #1a1a1a; border: 1px solid var(--accent); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); z-index: 5000; min-width: 140px; }
+  .active-board { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 10px; }
+  .hidden-input { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react,env">
+const { useState, useEffect, useRef } = React;
+
+const PITCH = 28, PAD = 20, HOLE_R = 4;
+const BAND_MAP = { 0: "#000", 1: "#8B4513", 2: "#F00", 3: "#FFA500", 4: "#FF0", 5: "#080", 6: "#00F", 7: "#E8E", 8: "#888", 9: "#FFF" };
+
+const RES_VALS = ["0Ω", "10Ω", "22Ω", "47Ω", "100Ω", "220Ω", "330Ω", "470Ω", "680Ω", "1k", "2.2k", "4.7k", "10k", "22k", "47k", "100k", "220k", "470k", "1M", "10M"];
+const CER_VALS = ["10pF", "22pF", "100pF", "1nF", "10nF", "100nF", "1uF"];
+const ELEC_VALS = ["1uF", "4.7uF", "10uF", "47uF", "100uF", "220uF", "470uF", "1000uF"];
+const NPN_VALS = ["SS8050", "2N2222", "2N3904", "BC547", "TIP120", "BD139"];
+const PNP_VALS = ["SS8550", "S9012", "S9015", "2N3906", "BC557", "BD140"];
+
+const COMP_DEFS = {
+  resistor: { label:"Resistor", defaultSpan: 3, values: RES_VALS, color: "#d4a84a", style: "axial" },
+  npn: { label:"NPN Transistor", defaultSpan: 2, values: NPN_VALS, color: "#222", style: "to92", labels: ["E","B","C"] },
+  pnp: { label:"PNP Transistor", defaultSpan: 2, values: PNP_VALS, color: "#222", style: "to92", labels: ["E","B","C"] },
+  ceramic: { label:"Cap (Ceramic)", defaultSpan: 1, values: CER_VALS, color: "#f4a460", style: "disc" },
+  electrolytic: { label:"Cap (Elec)", defaultSpan: 2, values: ELEC_VALS, color: "#333", style: "can", polarized: true },
+  led: { label:"LED", defaultSpan: 1, values: ["Red", "Green", "Blue", "Yellow", "White"], color: "#f33", style: "led", polarized: true },
+  piezo: { label:"Piezo Disc", defaultSpan: 3, values: ["20mm", "27mm", "35mm"], color: "#daa520", style: "piezo" },
+  motor: { label:"3V DC Motor", defaultSpan: 4, values: ["Standard Hobby"], color: "#aaa", style: "motor", polarized: true },
+  diode: { label:"Diode", defaultSpan: 2, values: ["1N4148", "1N4007", "1N5819"], color: "#111", style: "axial", polarized: true },
+  wire: { label:"Wire Link", defaultSpan: 2, values: ["Silver"], color: "#C0C0C0", style: "wire" }
+};
+
+const getResistorBands = (valStr) => {
+  let val = parseFloat(valStr);
+  if (valStr.includes('k')) val *= 1000;
+  if (valStr.includes('M')) val *= 1000000;
+  if (val === 0 || isNaN(val)) return [BAND_MAP[0], BAND_MAP[0], BAND_MAP[0]];
+  let sig = val.toString().replace('.', '');
+  let b1 = parseInt(sig[0]);
+  let b2 = sig.length > 1 ? parseInt(sig[1]) : 0;
+  let multiplier = Math.floor(Math.log10(val)) - 1;
+  multiplier = Math.max(0, multiplier);
+  return [BAND_MAP[b1], BAND_MAP[b2], BAND_MAP[multiplier]];
+};
+
+function ComponentRenderer({ comp, isGhost, config, isBottom }) {
+  const def = COMP_DEFS[comp.type];
+  const { cols } = config;
+  const getHXY = (r, c) => ({ x: PAD + (isBottom ? cols-1-c : c) * PITCH + PITCH/2, y: PAD + r * PITCH + PITCH/2 });
+
+  const span = comp.span || def.defaultSpan;
+  const pinCoords = [];
+  
+  if (comp.type === 'npn' || comp.type === 'pnp') {
+    for(let i=0; i<3; i++) pinCoords.push([0, i * (span/2)]);
+  } else {
+    pinCoords.push([0,0], [0, span]);
+  }
+
+  const pts = pinCoords.map(([dr, dc]) => {
+    let rO, cO;
+    if (comp.rot === 0) { rO = dr; cO = dc; }
+    else if (comp.rot === 1) { rO = dc; cO = -dr; }
+    else if (comp.rot === 2) { rO = -dr; cO = -dc; }
+    else { rO = -dc; cO = dr; }
+    return getHXY(comp.row + rO, comp.col + cO);
+  });
+
+  const pStart = pts[0], pEnd = pts[pts.length - 1];
+  const midX = (pStart.x + pEnd.x) / 2, midY = (pStart.y + pEnd.y) / 2;
+  const angle = Math.atan2(pEnd.y - pStart.y, pEnd.x - pStart.x) * 180 / Math.PI;
+  const leadC = isGhost ? "rgba(200, 200, 200, 0.15)" : "#bbb";
+
+  return (
+    <g>
+      {isBottom && pts.map((p, i) => (
+         <circle key={`pad-${i}`} cx={p.x} cy={p.y} r={9} fill="none" stroke="cyan" strokeWidth="2" opacity="0.6" />
+      ))}
+
+      {def.style === "wire" ? (
+        <line x1={pts[0].x} y1={pts[0].y} x2={pts[1].x} y2={pts[1].y} stroke={isGhost ? "cyan" : def.color} strokeWidth="6" strokeLinecap="round" opacity={isGhost ? 0.3 : 1} />
+      ) : (
+        <>
+          {!isGhost && pts.map((p, i) => (
+            <line key={i} x1={midX} y1={midY} x2={p.x} y2={p.y} stroke={leadC} strokeWidth="2.5" />
+          ))}
+
+          {def.style === "axial" && (
+            <g transform={`translate(${midX},${midY}) rotate(${angle})`}>
+              <rect x={-18} y={-8} width={36} height={16} rx={4} fill={isGhost ? "none" : def.color} stroke={isGhost ? "cyan" : "#000"} />
+              {comp.type === "resistor" && !isGhost && getResistorBands(comp.value).map((color, i) => (
+                <rect key={i} x={-12 + i*7} y={-8} width={4} height={16} fill={color} />
+              ))}
+              {comp.type === "diode" && !isGhost && <rect x={8} y={-8} width={5} height={16} fill="#fff" />}
+            </g>
+          )}
+
+          {def.style === "to92" && (
+            <g transform={`translate(${midX},${midY}) rotate(${angle})`}>
+              {isGhost ? (
+                <g transform="scale(1,-1)"> 
+                    <path d="M -22 4 L 22 4 Q 22 -22 0 -22 Q -22 -22 -22 4 Z" fill="none" stroke="cyan" strokeWidth="2" opacity="0.3"/>
+                </g>
+              ) : (
+                <path d="M -22 4 L 22 4 Q 22 -22 0 -22 Q -22 -22 -22 4 Z" fill="#111" stroke="#444" />
+              )}
+              {def.labels && def.labels.map((txt, i) => {
+                const p = pts[i];
+                return <text key={i} x={p.x - midX} y={p.y - midY - 12} textAnchor="middle" fontSize="10" fontWeight="bold" fill="yellow" transform={`rotate(${-angle})`}>{txt}</text>
+              })}
+            </g>
+          )}
+
+          {def.style === "can" && (
+            <g transform={`translate(${midX},${midY}) rotate(${angle})`}>
+              <circle r={16} fill={isGhost ? "none" : "#222"} stroke={isGhost ? "cyan" : "#000"} />
+              {!isGhost && <path d="M 6 -14.8 A 16 16 0 0 1 6 14.8 L 13 10 L 13 -10 Z" fill="#888" opacity="0.8" />}
+            </g>
+          )}
+
+          {def.style === "disc" && (
+            <circle cx={midX} cy={midY} r={12} fill={isGhost ? "none" : "#f4a460"} stroke={isGhost ? "cyan" : "#e08e45"} />
+          )}
+
+          {def.style === "piezo" && (
+            <g>
+              <circle cx={midX} cy={midY} r={28} fill={isGhost ? "none" : "goldenrod"} stroke="#8b7500" strokeWidth="2" />
+              <circle cx={midX} cy={midY} r={18} fill={isGhost ? "none" : "#eee"} stroke="#999" strokeWidth="1" />
+            </g>
+          )}
+
+          {def.style === "motor" && (
+            <g transform={`translate(${midX},${midY}) rotate(${angle})`}>
+              <rect x={-30} y={-22} width={60} height={44} rx={12} fill={isGhost ? "none" : "#999"} stroke="#555" />
+              {!isGhost && <circle cx={35} cy={0} r={4} fill="#555" />} 
+            </g>
+          )}
+
+          {def.style === "led" && (
+            <circle cx={midX} cy={midY} r={15} fill={isGhost ? "none" : (comp.value === "White" ? "#fff" : comp.value.toLowerCase())} stroke="#fff" />
+          )}
+
+          {def.polarized && (
+            <text x={pts[0].x} y={pts[0].y - 12} textAnchor="middle" fontSize="16" fontWeight="bold" fill="#ff4444" style={{paintOrder:'stroke', stroke:'#000', strokeWidth:'3px'}} transform={isBottom ? `rotate(${0})` : ''}>{"+"}</text>
+          )}
+        </>
+      )}
+      {!isGhost && <text x={midX} y={midY + 24} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#fff" style={{paintOrder:'stroke', stroke:'#000', strokeWidth:'2px'}}>{comp.value}</text>}
+    </g>
+  );
+}
+
+const BoardSVG = React.forwardRef(({ side, config, components, traces, pendingTrace, onHoleDown, onHoleOver, onCompClick, onTraceClick, selectedIdx, selectedTraceIdx, activeSide }, ref) => {
+  const isBottom = side === "bottom";
+  const { rows, cols } = config;
+  const W = cols * PITCH + PAD * 2;
+  const H = rows * PITCH + PAD * 2;
+  const getHXY = (r, c) => ({ x: PAD + (isBottom ? cols-1-c : c) * PITCH + PITCH/2, y: PAD + r * PITCH + PITCH/2 });
+
+  return (
+    <svg ref={ref} width={W} height={H} className={activeSide === side ? 'active-board' : ''} xmlns="http://www.w3.org/2000/svg" style={{ background: isBottom ? "#0a1f0a" : "#2d5a31", borderRadius: 10, display: "block" }}>
+      <rect width="100%" height="100%" fill={isBottom ? "#0a1f0a" : "#2d5a31"} rx="10" />
+      {Array.from({ length: rows }).map((_, r) => Array.from({ length: cols }).map((_, c) => {
+          const { x, y } = getHXY(r, c);
+          return <React.Fragment key={`${r}-${c}`}>
+            <circle cx={x} cy={y} r={HOLE_R} fill="#000" />
+            <rect x={x-14} y={y-14} width={28} height={28} fill="transparent" style={{cursor: isBottom ? "crosshair" : "copy"}} 
+              onMouseDown={(e) => { e.preventDefault(); onHoleDown(side, r, c); }} onMouseOver={() => onHoleOver(side, r, c)} />
+          </React.Fragment>;
+      }))}
+      {isBottom && components.map((comp, i) => <ComponentRenderer key={`b-${i}`} comp={comp} isGhost={true} config={config} isBottom={true} />)}
+      {isBottom && [...traces, ...(pendingTrace ? [pendingTrace] : [])].map((tr, i) => {
+          const isPending = i >= traces.length;
+          const strokeColor = (selectedTraceIdx === i && !isPending) ? "#fff" : (isPending ? "#666" : "#a0a0a0");
+          return <polyline key={i} points={tr.holes.map(([r,c]) => { const p = getHXY(r,c); return `${p.x},${p.y}`; }).join(" ")} fill="none" 
+            stroke={strokeColor} strokeWidth={isPending ? 8 : 10} strokeLinecap="round" strokeLinejoin="round" opacity={isPending ? 0.7 : 1}
+            onClick={(e) => { e.stopPropagation(); if(!isPending) onTraceClick(i, e.clientX, e.clientY); }} />
+      })}
+      {!isBottom && components.map((comp, i) => (
+        <g key={`t-${i}`} onClick={(e) => { e.stopPropagation(); onCompClick(i, e.clientX, e.clientY); }}>
+          <ComponentRenderer comp={comp} isGhost={false} config={config} isBottom={false} />
+          {selectedIdx === i && <rect x={getHXY(comp.row, comp.col).x-14} y={getHXY(comp.row, comp.col).y-14} width={28} height={28} fill="none" stroke="orange" strokeDasharray="4"/>}
+        </g>
+      ))}
+    </svg>
+  );
+});
+
+function App() {
+  const [config, setConfig] = useState({ rows: 18, cols: 18 });
+  const [components, setComponents] = useState([]);
+  const [traces, setTraces] = useState([]);
+  const [selType, setSelType] = useState("resistor");
+  const [activeSide, setActiveSide] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [hud, setHud] = useState(null);
+  const [isMoving, setIsMoving] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const [selectedTraceIdx, setSelectedTraceIdx] = useState(null);
+  
+  const topRef = useRef();
+  const botRef = useRef();
+  const fileInputRef = useRef();
+
+  const handleSave = () => {
+    const blob = new Blob([JSON.stringify({ config, components, traces })], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "perf_design.gpf"; a.click();
+  };
+
+  const handleLoad = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try { const d = JSON.parse(event.target.result); setConfig(d.config); setComponents(d.components); setTraces(d.traces); } catch (err) { alert("Load Failed"); }
+    };
+    reader.readAsText(file);
+  };
+
+  const exportSVG = () => {
+    const W = config.cols * PITCH + PAD * 2;
+    const H = config.rows * PITCH + PAD * 2;
+    const combined = `
+      <svg width="${W*2 + 80}" height="${H + 100}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="#0a0f0a"/>
+        <text x="20" y="30" fill="#daa520" font-family="Arial" font-size="14" font-weight="bold">TOP PLACEMENT</text>
+        <g transform="translate(20, 50)">${topRef.current.innerHTML}</g>
+        <text x="${W+60}" y="30" fill="#daa520" font-family="Arial" font-size="14" font-weight="bold">SOLDER SIDE</text>
+        <g transform="translate(${W + 60}, 50)">${botRef.current.innerHTML}</g>
+      </svg>`;
+    const blob = new Blob([combined], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "perf_export.svg"; a.click();
+  };
+
+  const onHoleDown = (side, r, c) => {
+    if (side === "bottom") { setPending({ holes: [[r, c]] }); }
+    else {
+      if(isMoving && selectedIdx !== null) {
+        let nc = [...components]; nc[selectedIdx] = {...nc[selectedIdx], row: r, col: c};
+        setComponents(nc); setIsMoving(false); setSelectedIdx(null);
+      } else {
+        const def = COMP_DEFS[selType];
+        setComponents([...components, { type: selType, row: r, col: c, value: def.values[0], rot: 0, span: def.defaultSpan }]);
+      }
+    }
+  };
+
+  const onHoleOver = (side, r, c) => {
+    setActiveSide(side);
+    if (pending && side === "bottom") {
+      const last = pending.holes[pending.holes.length - 1];
+      if (last[0] !== r || last[1] !== c) setPending({ ...pending, holes: [...pending.holes, [r, c]] });
+    }
+  };
+
+  useEffect(() => {
+    const up = () => { if (pending) { if (pending.holes.length > 1) setTraces(t => [...t, pending]); setPending(null); } };
+    window.addEventListener("mouseup", up); return () => window.removeEventListener("mouseup", up);
+  }, [pending]);
+
+  return (
+    <div id="root" onClick={() => { setHud(null); if(!isMoving) setSelectedIdx(null); setSelectedTraceIdx(null); }}>
+      <div className="sidebar" onClick={e => e.stopPropagation()}>
+        <h2 style={{color:'var(--accent)'}}>PerfSim Pro v1.1</h2>
+        <div className="card"><span className="label-tiny">Board Setup</span>
+          <div style={{display:'flex', gap:5}}>
+            <div><label className="label-tiny">Rows</label><input type="number" value={config.rows} onChange={e=>setConfig({...config, rows: parseInt(e.target.value)||1})}/></div>
+            <div><label className="label-tiny">Cols</label><input type="number" value={config.cols} onChange={e=>setConfig({...config, cols: parseInt(e.target.value)||1})}/></div>
+          </div>
+        </div>
+        <div className="card"><span className="label-tiny">Part Selection</span>
+          <select value={selType} onChange={e=>setSelType(e.target.value)}>
+            {Object.entries(COMP_DEFS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+        <div className="card"><span className="label-tiny">Management</span>
+          <button onClick={handleSave}>Save Project</button>
+          <button onClick={() => fileInputRef.current.click()}>Load Project</button>
+          <input type="file" ref={fileInputRef} className="hidden-input" accept=".gpf" onChange={handleLoad} />
+          <button onClick={exportSVG}>Export SVG</button>
+          <button className="btn-danger" style={{marginTop:8}} onClick={() => {if(confirm("Clear board?")) {setComponents([]); setTraces([]);}}}>Clear Board</button>
+        </div>
+      </div>
+
+      <div className="board-container">
+        <div className="view-column"><div className="view-title">Placement (Top)</div>
+          <BoardSVG ref={topRef} side="top" config={config} components={components} traces={[]} onHoleDown={onHoleDown} activeSide={activeSide} onHoleOver={onHoleOver} onCompClick={(i,x,y) => { setSelectedIdx(i); setHud({type:'comp', i,x,y}); }} selectedIdx={selectedIdx} />
+        </div>
+        <div className="view-column"><div className="view-title">Solder (Bottom)</div>
+          <BoardSVG ref={botRef} side="bottom" config={config} components={components} traces={traces} pendingTrace={pending} activeSide={activeSide} onHoleDown={onHoleDown} onHoleOver={onHoleOver} onTraceClick={(i,x,y) => { setSelectedTraceIdx(i); setHud({type:'trace', i,x,y}); }} selectedTraceIdx={selectedTraceIdx} />
+        </div>
+      </div>
+
+      {hud && (
+        <div className="hud-menu" style={{ left: hud.x + 10, top: hud.y + 10 }} onClick={e => e.stopPropagation()}>
+          {hud.type === 'comp' ? (
+            <>
+              <select value={components[hud.i].value} onChange={(e)=>{let nc=[...components]; nc[hud.i].value=e.target.value; setComponents(nc);}}>
+                {COMP_DEFS[components[hud.i].type].values.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <div style={{display:'flex', gap:2}}>
+                <button onClick={()=>{let nc=[...components]; nc[hud.i].span=Math.min(12, (nc[hud.i].span||1)+1); setComponents(nc);}}>Span +</button>
+                <button onClick={()=>{let nc=[...components]; nc[hud.i].span=Math.max(1, (nc[hud.i].span||1)-1); setComponents(nc);}}>Span -</button>
+              </div>
+              <button onClick={() => {let nc=[...components]; nc[hud.i].rot=(nc[hud.i].rot+1)%4; setComponents(nc);}}>Rotate</button>
+              <button onClick={() => {setIsMoving(true); setHud(null);}}>Move</button>
+              <button className="btn-danger" onClick={() => {setComponents(components.filter((_,i)=>i!==hud.i)); setHud(null);}}>Erase</button>
+            </>
+          ) : (
+            <button className="btn-danger" onClick={() => {setTraces(traces.filter((_,i)=>i!==hud.i)); setHud(null);}}>Erase Trace</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
